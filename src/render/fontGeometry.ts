@@ -1,5 +1,7 @@
 import * as fontkit from 'fontkit';
-import type { CaptionBlock, LookParameters } from '../types';
+import { meshParametersForLook } from '../looks/registry';
+import type { LookState } from '../looks/types';
+import type { CaptionBlock } from '../types';
 import { flattenedClone, fontPathToPaper } from './paperGeometry';
 import { triangulateCompoundPath } from './meshCompiler';
 
@@ -49,7 +51,7 @@ function wordIndexForOffset(block: CaptionBlock, offset: number): number {
 export function compileBlockMesh(
   font: LoadedFont,
   block: CaptionBlock,
-  look: LookParameters,
+  look: LookState,
   width: number,
   height: number,
 ): CompiledBlockMesh {
@@ -64,19 +66,21 @@ export function compileBlockMesh(
     };
   }
 
+  const parameters = meshParametersForLook(look);
   const run = font.layout(block.text);
-  const scale = look.fontSize / font.unitsPerEm;
-  const advances = run.positions.map((position) => position.xAdvance * scale + look.letterSpacing);
-  const totalWidth = advances.reduce((sum, advance) => sum + advance, 0) - look.letterSpacing;
+  const scale = parameters.fontSize / font.unitsPerEm;
+  const advances = run.positions.map((position) => position.xAdvance * scale + parameters.letterSpacing);
+  const totalWidth = advances.reduce((sum, advance) => sum + advance, 0) - parameters.letterSpacing;
   const fitScale = Math.min(1, (width * 0.82) / Math.max(1, totalWidth));
   const actualScale = scale * fitScale;
-  const baseline = height / 2 + look.fontSize * fitScale * 0.32;
+  const baseline = height / 2 + parameters.fontSize * fitScale * 0.32;
   let cursorX = (width - totalWidth * fitScale) / 2;
   const glyphs: Array<{
     compound: ReturnType<typeof fontPathToPaper>;
     glyphIndex: number;
     wordIndex: number;
     center: [number, number];
+    bounds: [number, number, number, number];
   }> = [];
 
   const sourceCodePoints = Array.from(block.text.matchAll(/./gu), (match) => match.index ?? 0);
@@ -101,30 +105,47 @@ export function compileBlockMesh(
       glyphIndex,
       wordIndex: wordIndexForOffset(block, stringIndex),
       center: [bounds.center.x, bounds.center.y],
+      bounds: [bounds.left, bounds.top, bounds.right, bounds.bottom],
     });
-    cursorX += position.xAdvance * actualScale + look.letterSpacing * fitScale;
+    cursorX += position.xAdvance * actualScale + parameters.letterSpacing * fitScale;
   });
 
   const blockCenter: [number, number] = [width / 2, height / 2];
+  const wordCenters = new Map<number, [number, number]>();
+  block.words.forEach((_word, wordIndex) => {
+    const visibleGlyphs = glyphs.filter(({ bounds, wordIndex: glyphWordIndex }) => (
+      glyphWordIndex === wordIndex
+      && (bounds[2] > bounds[0] || bounds[3] > bounds[1])
+    ));
+    if (visibleGlyphs.length === 0) return;
+    const left = Math.min(...visibleGlyphs.map(({ bounds }) => bounds[0]));
+    const top = Math.min(...visibleGlyphs.map(({ bounds }) => bounds[1]));
+    const right = Math.max(...visibleGlyphs.map(({ bounds }) => bounds[2]));
+    const bottom = Math.max(...visibleGlyphs.map(({ bounds }) => bounds[3]));
+    wordCenters.set(wordIndex, [(left + right) / 2, (top + bottom) / 2]);
+  });
   const data: number[] = [];
   const glyphTimingStarts: number[] = [];
   let triangleCount = 0;
 
   glyphs.forEach(({ compound, glyphIndex, wordIndex, center }) => {
-    const flatness = Math.max(0.18, 2.4 - look.meshDensity * 0.21);
+    const flatness = Math.max(0.18, 2.4 - parameters.meshDensity * 0.21);
     const flattened = flattenedClone(compound, flatness);
     const { triangles } = triangulateCompoundPath(flattened);
     flattened.remove();
     compound.remove();
 
-    const n1 = hashNoise(look.seed + glyphIndex * 3.17);
-    const n2 = hashNoise(look.seed + glyphIndex * 7.91);
-    const n3 = hashNoise(look.seed + glyphIndex * 13.73);
-    const angle = (n3 - 0.5) * look.twist * (Math.PI / 180);
-    const radius = look.crumpleStrength * (0.35 + n1 * 0.65);
-    const crumple: [number, number] = [
-      blockCenter[0] + Math.cos(n2 * Math.PI * 2) * radius,
-      blockCenter[1] + Math.sin(n2 * Math.PI * 2) * radius * 0.62,
+    const n1 = hashNoise(parameters.seed + glyphIndex * 3.17);
+    const n2 = hashNoise(parameters.seed + glyphIndex * 7.91);
+    const n3 = hashNoise(parameters.seed + glyphIndex * 13.73);
+    const angle = (n3 - 0.5) * parameters.rotation * (Math.PI / 180);
+    const radius = parameters.scatter * (0.35 + n1 * 0.65);
+    const anchor = parameters.anchor === 'word'
+      ? wordCenters.get(wordIndex) ?? blockCenter
+      : blockCenter;
+    const effectCenter: [number, number] = [
+      anchor[0] + Math.cos(n2 * Math.PI * 2) * radius,
+      anchor[1] + Math.sin(n2 * Math.PI * 2) * radius * 0.62,
     ];
     const word = block.words[wordIndex];
     const timings: [number, number] = word
@@ -144,10 +165,10 @@ export function compileBlockMesh(
           y,
           center[0],
           center[1],
-          crumple[0],
-          crumple[1],
+          effectCenter[0],
+          effectCenter[1],
           angle,
-          look.crumpleScale,
+          parameters.initialScale,
           timings[0],
           timings[1],
           ...barycentric[index]!,

@@ -1,19 +1,22 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { ActiveCaptionState, CaptionDocument, LookParameters } from '../types';
-import { connectCaptureBridge } from '../render/captureBridge';
+import { meshParametersForLook } from '../looks/registry';
+import type { LookState } from '../looks/types';
+import type { ActiveCaptionState, CaptionDocument } from '../types';
+import { connectCaptureBridge, type CanvasCaptureRequest } from '../render/captureBridge';
 import { compileBlockMesh, loadPrototypeFont, type CompiledBlockMesh } from '../render/fontGeometry';
 import { WebGpuTextRenderer } from '../render/webgpuRenderer';
 
 const props = defineProps<{
   document: CaptionDocument;
   time: number;
-  look: LookParameters;
+  look: LookState;
   active: ActiveCaptionState;
 }>();
 
 const emit = defineEmits<{
   seek: [time: number];
+  'select:look': [id: LookState['id']];
 }>();
 
 const canvas = ref<HTMLCanvasElement>();
@@ -62,7 +65,7 @@ async function downloadScreenshot(): Promise<void> {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `dynamic-type-${props.time.toFixed(2)}s.png`;
+    link.download = `dynamic-type-${props.look.id}-${props.time.toFixed(2)}s.png`;
     link.click();
     URL.revokeObjectURL(url);
     captureState.value = 'saved';
@@ -87,7 +90,7 @@ function reportCaptureStatus(state: 'loading' | 'ready' | 'error', detail?: stri
   });
 }
 
-async function captureAt(requestedTime?: number): Promise<Blob> {
+async function captureAt(request: CanvasCaptureRequest): Promise<Blob> {
   if (!renderer) {
     throw new Error(
       status.value === 'error'
@@ -95,14 +98,22 @@ async function captureAt(requestedTime?: number): Promise<Blob> {
         : 'Renderer is still initializing',
     );
   }
-  if (requestedTime !== undefined) {
-    emit('seek', requestedTime);
+  const stateChanged = request.time !== undefined || (
+    request.look !== undefined && request.look !== props.look.id
+  );
+  if (request.look !== undefined && request.look !== props.look.id) {
+    emit('select:look', request.look);
+  }
+  if (request.time !== undefined) emit('seek', request.time);
+  if (stateChanged) {
     await nextTick();
     await nextFrame();
   }
   reportCaptureStatus('ready', JSON.stringify({
-    requestedTime,
+    requestedTime: request.time,
+    requestedLook: request.look,
     actualTime: props.time,
+    lookId: props.look.id,
     blockId: props.active.block?.id,
     wordId: props.active.word?.id,
     meshBlockId: meshStats.value?.blockId,
@@ -145,23 +156,18 @@ watch(
   [
     () => props.document.revision,
     () => props.active.block?.id,
-    () => props.look.fontSize,
-    () => props.look.crumpleStrength,
-    () => props.look.crumpleScale,
-    () => props.look.twist,
-    () => props.look.letterSpacing,
-    () => props.look.meshDensity,
-    () => props.look.seed,
+    () => props.look.id,
+    () => JSON.stringify(meshParametersForLook(props.look)),
   ],
   rebuildMesh,
 );
 watch(
   [
-    () => props.look.revealDuration,
-    () => props.look.background,
-    () => props.look.fill,
-    () => props.look.activeFill,
-    () => props.look.showMesh,
+    () => props.look.parameters.revealDuration,
+    () => props.look.parameters.background,
+    () => props.look.parameters.fill,
+    () => props.look.parameters.activeFill,
+    () => props.look.parameters.showMesh,
   ],
   render,
 );

@@ -1,9 +1,17 @@
-export type CanvasCapture = (requestedTime?: number) => Promise<Blob>;
+import type { LookId } from '../looks/types';
+
+export type CanvasCaptureRequest = {
+  time?: number;
+  look?: LookId;
+};
+
+export type CanvasCapture = (request: CanvasCaptureRequest) => Promise<Blob>;
 
 type CaptureCommand = {
   id: string;
   client: string;
   time?: number;
+  look?: LookId;
 };
 
 const RETRY_DELAY = 400;
@@ -44,7 +52,7 @@ export function connectCaptureBridge(capture: CanvasCapture): () => void {
         let body: BodyInit;
         let contentType: string;
         try {
-          body = await bridge.capture(command.time);
+          body = await bridge.capture({ time: command.time, look: command.look });
           contentType = 'image/png';
         } catch (error) {
           body = JSON.stringify({ error: error instanceof Error ? error.message : String(error) });

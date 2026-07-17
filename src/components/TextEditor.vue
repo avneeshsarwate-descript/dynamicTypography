@@ -1,24 +1,59 @@
 <script setup lang="ts">
-import type { ActiveCaptionState, CaptionDocument, LookParameters } from '../types';
+import { computed } from 'vue';
+import {
+  lookDefinitionFor,
+  lookDefinitions,
+  updateLookParameter,
+} from '../looks/registry';
+import type {
+  LookId,
+  LookParameterDefinition,
+  LookParameterValue,
+  LookState,
+} from '../looks/types';
+import type { ActiveCaptionState, CaptionDocument } from '../types';
 
 const props = defineProps<{
   text: string;
   document: CaptionDocument;
-  look: LookParameters;
+  look: LookState;
   active: ActiveCaptionState;
 }>();
 
 const emit = defineEmits<{
   'update:text': [value: string];
-  'update:look': [value: LookParameters];
+  'update:look': [value: LookState];
+  'select:look': [id: LookId];
 }>();
 
-function updateLook<Key extends keyof LookParameters>(key: Key, value: LookParameters[Key]): void {
-  emit('update:look', { ...props.look, [key]: value });
+const definition = computed(() => lookDefinitionFor(props.look.id));
+const rangeParameters = computed(() => definition.value.parameters.filter(
+  (parameter) => parameter.kind === 'range',
+));
+const toggleParameters = computed(() => definition.value.parameters.filter(
+  (parameter) => parameter.kind === 'toggle',
+));
+const colorParameters = computed(() => definition.value.parameters.filter(
+  (parameter) => parameter.kind === 'color',
+));
+
+function updateParameter(key: string, value: LookParameterValue): void {
+  emit('update:look', updateLookParameter(props.look, key, value));
 }
 
 function numericValue(event: Event): number {
   return Number((event.target as HTMLInputElement).value);
+}
+
+function parameterValue(parameter: LookParameterDefinition): LookParameterValue {
+  return props.look.parameters[parameter.key] ?? '';
+}
+
+function formatValue(parameter: LookParameterDefinition): string {
+  const value = parameterValue(parameter);
+  if (parameter.kind !== 'range' || typeof value !== 'number') return String(value);
+  const formatted = parameter.precision === undefined ? String(value) : value.toFixed(parameter.precision);
+  return `${formatted}${parameter.suffix ?? ''}`;
 }
 </script>
 
@@ -44,54 +79,60 @@ function numericValue(event: Event): number {
       <small>{{ active.block ? `Block ${active.block.sourceLine + 1}` : 'Between blocks' }}</small>
     </div>
 
-    <section class="controls" aria-label="Crumple look parameters">
-      <div class="section-heading">
-        <p class="eyebrow">Look 01</p>
-        <h2>Crumple / Resolve</h2>
+    <section class="controls" :aria-label="`${definition.label} look parameters`">
+      <div class="look-switcher" role="group" aria-label="Typography look">
+        <button
+          v-for="option in lookDefinitions"
+          :key="option.id"
+          type="button"
+          class="look-option"
+          :class="{ active: option.id === look.id }"
+          :aria-pressed="option.id === look.id"
+          @click="emit('select:look', option.id)"
+        >
+          <span class="look-number">{{ option.number }}</span>
+          <span class="look-icon" :class="`look-icon-${option.id}`" aria-hidden="true"><i /><i /><i /></span>
+          <strong>{{ option.label }}</strong>
+          <small>{{ option.shortDescription }}</small>
+        </button>
       </div>
 
-      <label class="control-row">
-        <span>Type size <output>{{ look.fontSize }}</output></span>
-        <input type="range" min="48" max="180" step="1" :value="look.fontSize" @input="updateLook('fontSize', numericValue($event))" />
-      </label>
-      <label class="control-row">
-        <span>Crumple <output>{{ look.crumpleStrength }}</output></span>
-        <input type="range" min="0" max="260" step="1" :value="look.crumpleStrength" @input="updateLook('crumpleStrength', numericValue($event))" />
-      </label>
-      <label class="control-row">
-        <span>Fold scale <output>{{ look.crumpleScale.toFixed(2) }}</output></span>
-        <input type="range" min="0.04" max="0.8" step="0.01" :value="look.crumpleScale" @input="updateLook('crumpleScale', numericValue($event))" />
-      </label>
-      <label class="control-row">
-        <span>Twist <output>{{ look.twist }}°</output></span>
-        <input type="range" min="0" max="360" step="1" :value="look.twist" @input="updateLook('twist', numericValue($event))" />
-      </label>
-      <label class="control-row">
-        <span>Resolve time <output>{{ look.revealDuration.toFixed(2) }}s</output></span>
-        <input type="range" min="0.08" max="1.2" step="0.01" :value="look.revealDuration" @input="updateLook('revealDuration', numericValue($event))" />
-      </label>
-      <label class="control-row">
-        <span>Word time <output>{{ look.wordDuration.toFixed(2) }}s</output></span>
-        <input type="range" min="0.2" max="1.4" step="0.02" :value="look.wordDuration" @input="updateLook('wordDuration', numericValue($event))" />
-      </label>
-      <label class="control-row">
-        <span>Block gap <output>{{ look.blockGap.toFixed(2) }}s</output></span>
-        <input type="range" min="0" max="1" step="0.02" :value="look.blockGap" @input="updateLook('blockGap', numericValue($event))" />
-      </label>
-      <label class="control-row">
-        <span>Mesh detail <output>{{ look.meshDensity }}</output></span>
-        <input type="range" min="2" max="10" step="1" :value="look.meshDensity" @input="updateLook('meshDensity', numericValue($event))" />
+      <div class="section-heading">
+        <p class="eyebrow">Look {{ definition.number }}</p>
+        <h2>{{ definition.label }} / Resolve</h2>
+        <p>{{ definition.description }}</p>
+      </div>
+
+      <label v-for="parameter in rangeParameters" :key="parameter.key" class="control-row">
+        <span>{{ parameter.label }} <output>{{ formatValue(parameter) }}</output></span>
+        <input
+          type="range"
+          :min="parameter.min"
+          :max="parameter.max"
+          :step="parameter.step"
+          :value="parameterValue(parameter)"
+          @input="updateParameter(parameter.key, numericValue($event))"
+        />
       </label>
 
-      <label class="mesh-toggle">
-        <input type="checkbox" :checked="look.showMesh" @change="updateLook('showMesh', ($event.target as HTMLInputElement).checked)" />
-        <span>Reveal triangle mesh</span>
+      <label v-for="parameter in toggleParameters" :key="parameter.key" class="mesh-toggle">
+        <input
+          type="checkbox"
+          :checked="Boolean(parameterValue(parameter))"
+          @change="updateParameter(parameter.key, ($event.target as HTMLInputElement).checked)"
+        />
+        <span>{{ parameter.label }}</span>
       </label>
 
       <div class="color-grid">
-        <label>Stage <input type="color" :value="look.background" @input="updateLook('background', ($event.target as HTMLInputElement).value)" /></label>
-        <label>Type <input type="color" :value="look.fill" @input="updateLook('fill', ($event.target as HTMLInputElement).value)" /></label>
-        <label>Active <input type="color" :value="look.activeFill" @input="updateLook('activeFill', ($event.target as HTMLInputElement).value)" /></label>
+        <label v-for="parameter in colorParameters" :key="parameter.key">
+          {{ parameter.label }}
+          <input
+            type="color"
+            :value="String(parameterValue(parameter))"
+            @input="updateParameter(parameter.key, ($event.target as HTMLInputElement).value)"
+          />
+        </label>
       </div>
     </section>
   </aside>

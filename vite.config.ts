@@ -6,6 +6,7 @@ type CaptureCommand = {
   id: string;
   client: string;
   time?: number;
+  look?: 'collapse' | 'crumple';
 };
 
 type PagePoll = {
@@ -17,6 +18,7 @@ type PendingCapture = {
   response: ServerResponse;
   timeout: ReturnType<typeof setTimeout>;
   time?: number;
+  look?: 'collapse' | 'crumple';
 };
 
 function readRequest(request: IncomingMessage): Promise<Buffer> {
@@ -149,6 +151,7 @@ function captureBridge(): Plugin {
             if (pending.time !== undefined) {
               pending.response.setHeader('X-Canvas-Time', pending.time.toFixed(3));
             }
+            if (pending.look !== undefined) pending.response.setHeader('X-Typography-Look', pending.look);
             pending.response.end(payload);
             response.statusCode = 204;
             response.end();
@@ -165,8 +168,14 @@ function captureBridge(): Plugin {
           const requestedTime = url.searchParams.get('time');
           const client = url.searchParams.get('client') || 'default';
           const time = requestedTime === null ? undefined : Number(requestedTime);
+          const requestedLook = url.searchParams.get('look');
+          const look = requestedLook === null ? undefined : requestedLook;
           if (time !== undefined && (!Number.isFinite(time) || time < 0)) {
             json(response, 400, { error: 'time must be a finite, non-negative number' });
+            return;
+          }
+          if (look !== undefined && look !== 'collapse' && look !== 'crumple') {
+            json(response, 400, { error: 'look must be collapse or crumple' });
             return;
           }
 
@@ -175,8 +184,8 @@ function captureBridge(): Plugin {
             captures.delete(id);
             json(response, 504, { error: 'No browser returned a canvas capture within 15 seconds' });
           }, 15_000);
-          captures.set(id, { response, timeout, time });
-          dispatch({ id, client, time });
+          captures.set(id, { response, timeout, time, look });
+          dispatch({ id, client, time, look });
           return;
         }
 

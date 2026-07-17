@@ -3,34 +3,32 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import DisplayCanvas from './components/DisplayCanvas.vue';
 import Playhead from './components/Playhead.vue';
 import TextEditor from './components/TextEditor.vue';
+import {
+  createCollapseLook,
+  createCrumpleLook,
+} from './looks/registry';
+import type { LookId, LookState } from './looks/types';
 import { activeCaptionAt, buildCaptionDocument } from './model/captionDocument';
-import type { LookParameters } from './types';
 
 const sourceText = ref(`Type can remember being tangled.
 Every word finds its shape.
 Motion makes language physical.`);
 
-const look = ref<LookParameters>({
-  fontSize: 104,
-  crumpleStrength: 142,
-  crumpleScale: 0.18,
-  twist: 190,
-  revealDuration: 0.42,
-  wordDuration: 0.68,
-  blockGap: 0.34,
-  letterSpacing: -1,
-  meshDensity: 7,
-  seed: 23,
-  background: '#0a0b10',
-  fill: '#eee9dd',
-  activeFill: '#fe5a36',
-  showMesh: false,
-});
+const collapseLook = ref(createCollapseLook());
+const crumpleLook = ref(createCrumpleLook());
+const selectedLookId = ref<LookId>('collapse');
+const look = computed<LookState>(() => (
+  selectedLookId.value === 'collapse' ? collapseLook.value : crumpleLook.value
+));
 
 const revision = ref(1);
 const time = ref(0);
 const playing = ref(false);
-const document = computed(() => buildCaptionDocument(sourceText.value, look.value, revision.value));
+const document = computed(() => buildCaptionDocument(
+  sourceText.value,
+  look.value.parameters,
+  revision.value,
+));
 const active = computed(() => activeCaptionAt(document.value, time.value));
 
 let frameRequest: number | undefined;
@@ -76,8 +74,13 @@ function updateText(value: string): void {
   sourceText.value = value;
 }
 
-function updateLook(value: LookParameters): void {
-  look.value = value;
+function updateLook(value: LookState): void {
+  if (value.id === 'collapse') collapseLook.value = value;
+  else crumpleLook.value = value;
+}
+
+function selectLook(id: LookId): void {
+  selectedLookId.value = id;
 }
 
 function handleKeyboard(event: KeyboardEvent): void {
@@ -89,7 +92,12 @@ function handleKeyboard(event: KeyboardEvent): void {
 }
 
 watch(
-  [sourceText, () => look.value.wordDuration, () => look.value.blockGap],
+  [
+    sourceText,
+    selectedLookId,
+    () => look.value.parameters.wordDuration,
+    () => look.value.parameters.blockGap,
+  ],
   () => {
     revision.value += 1;
     time.value = Math.min(time.value, document.value.duration);
@@ -124,6 +132,7 @@ onBeforeUnmount(() => {
         :active="active"
         @update:text="updateText"
         @update:look="updateLook"
+        @select:look="selectLook"
       />
       <DisplayCanvas
         :document="document"
@@ -131,6 +140,7 @@ onBeforeUnmount(() => {
         :look="look"
         :active="active"
         @seek="seek"
+        @select:look="selectLook"
       />
     </div>
 

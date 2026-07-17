@@ -33,23 +33,6 @@ export type CaptionDocument = {
   blocks: CaptionBlock[];
 };
 
-export type LookParameters = {
-  fontSize: number;
-  crumpleStrength: number;
-  crumpleScale: number;
-  twist: number;
-  revealDuration: number;
-  wordDuration: number;
-  blockGap: number;
-  letterSpacing: number;
-  meshDensity: number;
-  seed: number;
-  background: string;
-  fill: string;
-  activeFill: string;
-  showMesh: boolean;
-};
-
 export type PlaybackState = {
   time: number;
   playing: boolean;

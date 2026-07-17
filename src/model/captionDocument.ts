@@ -4,8 +4,12 @@ import type {
   CaptionDocument,
   CaptionTau,
   CaptionWord,
-  LookParameters,
 } from '../types';
+
+type CaptionTiming = {
+  wordDuration: number;
+  blockGap: number;
+};
 
 const MIN_BLOCK_DURATION = 0.72;
 const EMPTY_BLOCK_DURATION = 0.42;
@@ -20,7 +24,7 @@ function tokenizeWords(text: string): Array<{ text: string; start: number; lengt
 
 export function buildCaptionDocument(
   text: string,
-  look: Pick<LookParameters, 'wordDuration' | 'blockGap'>,
+  look: CaptionTiming,
   revision: number,
 ): CaptionDocument {
   const lines = text.replace(/\r\n?/gu, '\n').split('\n');

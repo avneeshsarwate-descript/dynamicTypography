@@ -1,8 +1,10 @@
-import type { LookParameters } from '../types';
+import { effectUniformsForLook, lookDefinitions } from '../looks/registry';
+import type { AnyLookDefinition, LookId, LookState } from '../looks/types';
 import type { CompiledBlockMesh } from './fontGeometry';
 import { vertexStrideBytes } from './fontGeometry';
 
-const shader = /* wgsl */ `
+function shaderForLook(look: AnyLookDefinition): string {
+  return /* wgsl */ `
 struct Globals {
   viewport: vec2f,
   time: f32,
@@ -12,6 +14,7 @@ struct Globals {
   showMesh: f32,
   meshOpacity: f32,
   padding: vec2f,
+  effect: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -19,7 +22,7 @@ struct Globals {
 struct VertexInput {
   @location(0) position: vec2f,
   @location(1) glyphCenter: vec2f,
-  @location(2) crumpleCenter: vec2f,
+  @location(2) effectCenter: vec2f,
   @location(3) deformation: vec2f,
   @location(4) timing: vec2f,
   @location(5) barycentric: vec3f,
@@ -37,23 +40,13 @@ fn smootherstep(value: f32) -> f32 {
   return value * value * (3.0 - 2.0 * value);
 }
 
+${look.deformationWgsl}
+
 @vertex
 fn vertexMain(input: VertexInput) -> VertexOutput {
   let rawProgress = clamp((globals.time - input.timing.x) / max(globals.revealDuration, 0.001), 0.0, 1.0);
   let progress = smootherstep(rawProgress);
-  let folded = 1.0 - progress;
-  let angle = input.deformation.x * folded;
-  let cosine = cos(angle);
-  let sine = sin(angle);
-  let local = input.position - input.glyphCenter;
-  let rotated = vec2f(
-    local.x * cosine - local.y * sine,
-    local.x * sine + local.y * cosine,
-  );
-  let scale = mix(input.deformation.y, 1.0, progress);
-  let resolvedCenter = mix(input.crumpleCenter, input.glyphCenter, progress);
-  let settle = sin(progress * 3.14159265) * sin(globals.time * 8.0 + input.random * 17.0);
-  let world = resolvedCenter + rotated * scale + vec2f(settle * 2.0, settle * -1.2);
+  let world = deformGlyph(input, progress);
   let clip = vec2f(
     world.x / globals.viewport.x * 2.0 - 1.0,
     1.0 - world.y / globals.viewport.y * 2.0,
@@ -78,6 +71,7 @@ fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
   return mix(base, meshColor, meshMix);
 }
 `;
+}
 
 function colorComponents(value: string): [number, number, number, number] {
   const normalized = value.replace('#', '').trim();
@@ -115,7 +109,7 @@ export class WebGpuTextRenderer {
     private readonly canvas: HTMLCanvasElement,
     private readonly device: GPUDevice,
     private readonly context: GPUCanvasContext,
-    private readonly pipeline: GPURenderPipeline,
+    private readonly pipelines: ReadonlyMap<LookId, GPURenderPipeline>,
     private readonly globalsBuffer: GPUBuffer,
     private readonly bindGroup: GPUBindGroup,
     private readonly format: GPUTextureFormat,
@@ -139,59 +133,67 @@ export class WebGpuTextRenderer {
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
 
-    const module = device.createShaderModule({ code: shader, label: 'dynamic typography shader' });
-    const shaderInfo = await module.getCompilationInfo();
-    const shaderErrors = shaderInfo.messages.filter((message) => message.type === 'error');
-    if (shaderErrors.length) {
-      throw new Error(shaderErrors.map(
-        (message) => `WGSL ${message.lineNum}:${message.linePos} ${message.message}`,
-      ).join('\n'));
-    }
     const globalsBuffer = device.createBuffer({
       label: 'render globals',
-      size: 64,
+      size: 80,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     const bindGroupLayout = device.createBindGroupLayout({
       entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
     });
-    const pipeline = await device.createRenderPipelineAsync({
-      label: 'dynamic typography pipeline',
-      layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
-      vertex: {
-        module,
-        entryPoint: 'vertexMain',
-        buffers: [{
-          arrayStride: vertexStrideBytes,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: 'float32x2' },
-            { shaderLocation: 1, offset: 8, format: 'float32x2' },
-            { shaderLocation: 2, offset: 16, format: 'float32x2' },
-            { shaderLocation: 3, offset: 24, format: 'float32x2' },
-            { shaderLocation: 4, offset: 32, format: 'float32x2' },
-            { shaderLocation: 5, offset: 40, format: 'float32x3' },
-            { shaderLocation: 6, offset: 52, format: 'float32' },
-          ],
-        }],
-      },
-      fragment: {
-        module,
-        entryPoint: 'fragmentMain',
-        targets: [{
-          format,
-          blend: {
-            color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
-            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
-          },
-        }],
-      },
-      primitive: { topology: 'triangle-list' },
-    });
+    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+    const pipelineEntries = await Promise.all(lookDefinitions.map(async (look) => {
+      const module = device.createShaderModule({
+        code: shaderForLook(look),
+        label: `${look.label} typography shader`,
+      });
+      const shaderInfo = await module.getCompilationInfo();
+      const shaderErrors = shaderInfo.messages.filter((message) => message.type === 'error');
+      if (shaderErrors.length) {
+        throw new Error(shaderErrors.map(
+          (message) => `${look.label} WGSL ${message.lineNum}:${message.linePos} ${message.message}`,
+        ).join('\n'));
+      }
+      const pipeline = await device.createRenderPipelineAsync({
+        label: `${look.label} typography pipeline`,
+        layout: pipelineLayout,
+        vertex: {
+          module,
+          entryPoint: 'vertexMain',
+          buffers: [{
+            arrayStride: vertexStrideBytes,
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x2' },
+              { shaderLocation: 1, offset: 8, format: 'float32x2' },
+              { shaderLocation: 2, offset: 16, format: 'float32x2' },
+              { shaderLocation: 3, offset: 24, format: 'float32x2' },
+              { shaderLocation: 4, offset: 32, format: 'float32x2' },
+              { shaderLocation: 5, offset: 40, format: 'float32x3' },
+              { shaderLocation: 6, offset: 52, format: 'float32' },
+            ],
+          }],
+        },
+        fragment: {
+          module,
+          entryPoint: 'fragmentMain',
+          targets: [{
+            format,
+            blend: {
+              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
+            },
+          }],
+        },
+        primitive: { topology: 'triangle-list' },
+      });
+      return [look.id, pipeline] as const;
+    }));
+    const pipelines = new Map<LookId, GPURenderPipeline>(pipelineEntries);
     const bindGroup = device.createBindGroup({
       layout: bindGroupLayout,
       entries: [{ binding: 0, resource: { buffer: globalsBuffer } }],
     });
-    return new WebGpuTextRenderer(canvas, device, context, pipeline, globalsBuffer, bindGroup, format);
+    return new WebGpuTextRenderer(canvas, device, context, pipelines, globalsBuffer, bindGroup, format);
   }
 
   resize(width: number, height: number): boolean {
@@ -217,33 +219,38 @@ export class WebGpuTextRenderer {
     this.device.queue.writeBuffer(this.vertexBuffer, 0, mesh.vertices);
   }
 
-  private encodeFrame(time: number, look: LookParameters, texture: GPUTexture): GPUCommandEncoder {
-    const fill = colorComponents(look.fill);
-    const activeFill = colorComponents(look.activeFill);
+  private encodeFrame(time: number, look: LookState, texture: GPUTexture): GPUCommandEncoder {
+    const parameters = look.parameters;
+    const fill = colorComponents(parameters.fill);
+    const activeFill = colorComponents(parameters.activeFill);
+    const effect = effectUniformsForLook(look);
     const globals = new Float32Array([
       this.canvas.clientWidth,
       this.canvas.clientHeight,
       time,
-      look.revealDuration,
+      parameters.revealDuration,
       ...fill,
       ...activeFill,
-      look.showMesh ? 1 : 0,
+      parameters.showMesh ? 1 : 0,
       0.68,
       0,
       0,
+      ...effect,
     ]);
     this.device.queue.writeBuffer(this.globalsBuffer, 0, globals);
     const encoder = this.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
         view: texture.createView(),
-        clearValue: colorComponents(look.background),
+        clearValue: colorComponents(parameters.background),
         loadOp: 'clear',
         storeOp: 'store',
       }],
     });
     if (this.vertexBuffer && this.vertexCount > 0) {
-      pass.setPipeline(this.pipeline);
+      const pipeline = this.pipelines.get(look.id);
+      if (!pipeline) throw new Error(`No WebGPU pipeline exists for ${look.id}`);
+      pass.setPipeline(pipeline);
       pass.setBindGroup(0, this.bindGroup);
       pass.setVertexBuffer(0, this.vertexBuffer);
       pass.draw(this.vertexCount);
@@ -252,12 +259,12 @@ export class WebGpuTextRenderer {
     return encoder;
   }
 
-  render(time: number, look: LookParameters): void {
+  render(time: number, look: LookState): void {
     const encoder = this.encodeFrame(time, look, this.context.getCurrentTexture());
     this.device.queue.submit([encoder.finish()]);
   }
 
-  async capturePng(time: number, look: LookParameters): Promise<Blob> {
+  async capturePng(time: number, look: LookState): Promise<Blob> {
     this.device.pushErrorScope('validation');
     const width = this.canvas.width;
     const height = this.canvas.height;

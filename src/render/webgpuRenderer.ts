@@ -10,6 +10,8 @@ import type {
 import { MeshDeformationRenderer } from './meshDeformationRenderer';
 import { withTimeout } from './webgpuUtilities';
 
+const SAMPLE_COUNT = 4;
+
 /**
  * Owns only the GPU device, canvas target, capture target, and look selection.
  * Technique-specific geometry and draw passes live behind LookRenderer.
@@ -24,6 +26,7 @@ export class WebGpuTextRenderer {
   ) {}
 
   private activeRenderer: LookRenderer | undefined;
+  private multisampleTexture: GPUTexture | undefined;
 
   static async create(canvas: HTMLCanvasElement): Promise<WebGpuTextRenderer> {
     if (!navigator.gpu) throw new Error('WebGPU is not available in this browser');
@@ -39,7 +42,7 @@ export class WebGpuTextRenderer {
       alphaMode: 'premultiplied',
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
-    const renderContext = { device, format };
+    const renderContext = { device, format, sampleCount: SAMPLE_COUNT };
     const runtimeEntries = await Promise.all([
       MeshDeformationRenderer.create(renderContext, collapseLookDefinition),
       MeshDeformationRenderer.create(renderContext, crumpleLookDefinition),
@@ -55,9 +58,20 @@ export class WebGpuTextRenderer {
     const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
     const pixelWidth = Math.max(1, Math.round(width * pixelRatio));
     const pixelHeight = Math.max(1, Math.round(height * pixelRatio));
-    if (this.canvas.width === pixelWidth && this.canvas.height === pixelHeight) return false;
-    this.canvas.width = pixelWidth;
-    this.canvas.height = pixelHeight;
+    const sizeChanged = this.canvas.width !== pixelWidth || this.canvas.height !== pixelHeight;
+    if (!sizeChanged && this.multisampleTexture) return false;
+    if (sizeChanged) {
+      this.canvas.width = pixelWidth;
+      this.canvas.height = pixelHeight;
+    }
+    this.multisampleTexture?.destroy();
+    this.multisampleTexture = this.device.createTexture({
+      label: 'shared 4x MSAA look target',
+      size: { width: pixelWidth, height: pixelHeight },
+      sampleCount: SAMPLE_COUNT,
+      format: this.format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
     return true;
   }
 
@@ -73,7 +87,17 @@ export class WebGpuTextRenderer {
     if (!renderer || renderer.lookId !== look.id) {
       throw new Error(`The ${look.id} look has not received its caption source`);
     }
-    return renderer.encode({ time, look, output });
+    if (!this.multisampleTexture) {
+      throw new Error('The multisample render target has not been sized');
+    }
+    return renderer.encode({
+      time,
+      look,
+      target: {
+        multisampleView: this.multisampleTexture.createView(),
+        resolveView: output.createView(),
+      },
+    });
   }
 
   render(time: number, look: LookState): void {
@@ -147,6 +171,7 @@ export class WebGpuTextRenderer {
   }
 
   destroy(): void {
+    this.multisampleTexture?.destroy();
     for (const renderer of this.renderers.values()) renderer.destroy();
   }
 }

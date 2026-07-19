@@ -160,6 +160,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
         },
         fragment: { module, entryPoint: 'strokeFragment', targets: [{ format: context.format }] },
         primitive: { topology: 'triangle-list' },
+        multisample: { count: context.sampleCount },
       }),
       context.device.createRenderPipelineAsync({
         label: 'Balloon Stroke fill pipeline',
@@ -177,6 +178,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
         },
         fragment: { module, entryPoint: 'fillFragment', targets: [{ format: context.format }] },
         primitive: { topology: 'triangle-list' },
+        multisample: { count: context.sampleCount },
       }),
     ]);
     const bindGroup = context.device.createBindGroup({
@@ -276,10 +278,11 @@ export class BalloonStrokeRenderer implements LookRenderer {
     const encoder = this.context.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
-        view: frame.output.createView(),
+        view: frame.target.multisampleView,
+        resolveTarget: frame.target.resolveView,
         clearValue: colorComponents(parameters.background),
         loadOp: 'clear',
-        storeOp: 'store',
+        storeOp: 'discard',
       }],
     });
     pass.setBindGroup(0, this.bindGroup);

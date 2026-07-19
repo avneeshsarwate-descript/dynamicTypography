@@ -5,6 +5,7 @@ import type { CaptionBlock } from '../types';
 export type LookRenderContext = {
   device: GPUDevice;
   format: GPUTextureFormat;
+  sampleCount: number;
 };
 
 export type LookRenderSource = {
@@ -15,10 +16,15 @@ export type LookRenderSource = {
   height: number;
 };
 
+export type LookRenderTarget = {
+  multisampleView: GPUTextureView;
+  resolveView: GPUTextureView;
+};
+
 export type LookRenderFrame = {
   time: number;
   look: LookState;
-  output: GPUTexture;
+  target: LookRenderTarget;
 };
 
 export type LookRenderStats = {

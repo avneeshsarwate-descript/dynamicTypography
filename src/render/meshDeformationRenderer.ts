@@ -161,6 +161,7 @@ export class MeshDeformationRenderer implements LookRenderer {
         targets: [{ format: context.format }],
       },
       primitive: { topology: 'triangle-list' },
+      multisample: { count: context.sampleCount },
     });
     const bindGroup = context.device.createBindGroup({
       layout: bindGroupLayout,
@@ -231,10 +232,11 @@ export class MeshDeformationRenderer implements LookRenderer {
     const encoder = this.context.device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
-        view: frame.output.createView(),
+        view: frame.target.multisampleView,
+        resolveTarget: frame.target.resolveView,
         clearValue: colorComponents(parameters.background),
         loadOp: 'clear',
-        storeOp: 'store',
+        storeOp: 'discard',
       }],
     });
     if (this.vertexBuffer && this.vertexCount > 0) {

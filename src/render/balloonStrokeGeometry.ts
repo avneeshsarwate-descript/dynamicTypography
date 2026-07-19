@@ -42,6 +42,65 @@ function pushStrokeVertex(
   output.push(point[0], point[1], extrusion[0], extrusion[1], timing[0], timing[1]);
 }
 
+function vectorBetween(start: Point2, end: Point2): Point2 | undefined {
+  const deltaX = end[0] - start[0];
+  const deltaY = end[1] - start[1];
+  const length = Math.hypot(deltaX, deltaY);
+  if (length < 0.001) return undefined;
+  return [deltaX / length, deltaY / length];
+}
+
+function normalFor(direction: Point2): Point2 {
+  return [-direction[1], direction[0]];
+}
+
+function cross(left: Point2, right: Point2): number {
+  return left[0] * right[1] - left[1] * right[0];
+}
+
+function dot(left: Point2, right: Point2): number {
+  return left[0] * right[0] + left[1] * right[1];
+}
+
+function addRoundJoin(
+  output: number[],
+  point: Point2,
+  previousDirection: Point2,
+  nextDirection: Point2,
+  timing: Point2,
+  circleSegments: number,
+): number {
+  const turn = cross(previousDirection, nextDirection);
+  if (Math.abs(turn) < 0.0001) return 0;
+  const outsideScale = turn > 0 ? -1 : 1;
+  const previousNormal = normalFor(previousDirection);
+  const nextNormal = normalFor(nextDirection);
+  const start: Point2 = [
+    previousNormal[0] * outsideScale,
+    previousNormal[1] * outsideScale,
+  ];
+  const end: Point2 = [
+    nextNormal[0] * outsideScale,
+    nextNormal[1] * outsideScale,
+  ];
+  const angle = Math.atan2(cross(start, end), dot(start, end));
+  const segmentCount = Math.max(
+    1,
+    Math.ceil(Math.abs(angle) / (Math.PI * 2) * circleSegments),
+  );
+
+  for (let segment = 0; segment < segmentCount; segment += 1) {
+    const startProgress = segment / segmentCount;
+    const endProgress = (segment + 1) / segmentCount;
+    const startAngle = Math.atan2(start[1], start[0]) + angle * startProgress;
+    const endAngle = Math.atan2(start[1], start[0]) + angle * endProgress;
+    pushStrokeVertex(output, point, [0, 0], timing);
+    pushStrokeVertex(output, point, [Math.cos(startAngle), Math.sin(startAngle)], timing);
+    pushStrokeVertex(output, point, [Math.cos(endAngle), Math.sin(endAngle)], timing);
+  }
+  return segmentCount;
+}
+
 function addRoundStrokeContour(
   output: number[],
   points: Point2[],
@@ -54,11 +113,9 @@ function addRoundStrokeContour(
   for (let index = 0; index < points.length; index += 1) {
     const start = points[index]!;
     const end = points[(index + 1) % points.length]!;
-    const deltaX = end[0] - start[0];
-    const deltaY = end[1] - start[1];
-    const length = Math.hypot(deltaX, deltaY);
-    if (length < 0.001) continue;
-    const normal: Point2 = [-deltaY / length, deltaX / length];
+    const direction = vectorBetween(start, end);
+    if (!direction) continue;
+    const normal = normalFor(direction);
     const inverse: Point2 = [-normal[0], -normal[1]];
 
     pushStrokeVertex(output, start, normal, timing);
@@ -70,15 +127,21 @@ function addRoundStrokeContour(
     triangleCount += 2;
   }
 
-  for (const point of points) {
-    for (let segment = 0; segment < circleSegments; segment += 1) {
-      const angle = segment / circleSegments * Math.PI * 2;
-      const nextAngle = (segment + 1) / circleSegments * Math.PI * 2;
-      pushStrokeVertex(output, point, [0, 0], timing);
-      pushStrokeVertex(output, point, [Math.cos(angle), Math.sin(angle)], timing);
-      pushStrokeVertex(output, point, [Math.cos(nextAngle), Math.sin(nextAngle)], timing);
-      triangleCount += 1;
-    }
+  for (let index = 0; index < points.length; index += 1) {
+    const previous = points[(index - 1 + points.length) % points.length]!;
+    const point = points[index]!;
+    const next = points[(index + 1) % points.length]!;
+    const previousDirection = vectorBetween(previous, point);
+    const nextDirection = vectorBetween(point, next);
+    if (!previousDirection || !nextDirection) continue;
+    triangleCount += addRoundJoin(
+      output,
+      point,
+      previousDirection,
+      nextDirection,
+      timing,
+      circleSegments,
+    );
   }
   return triangleCount;
 }
@@ -125,8 +188,8 @@ export function compileBalloonStrokeMesh(
   const fillData: number[] = [];
   const strokeData: number[] = [];
   const glyphTimingStarts: number[] = [];
-  const flatness = Math.max(0.18, 2.4 - parameters.curveDetail * 0.21);
-  const circleSegments = Math.max(8, Math.round(parameters.curveDetail * 1.5));
+  const flatness = Math.max(0.12, 1.5 - parameters.curveDetail * 0.16);
+  const circleSegments = Math.max(16, Math.round(parameters.curveDetail * 4));
   let triangleCount = 0;
 
   run.glyphs.forEach((glyph, glyphIndex) => {
@@ -175,3 +238,7 @@ export function compileBalloonStrokeMesh(
 
 export const fillVertexStrideBytes = FILL_FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT;
 export const strokeVertexStrideBytes = STROKE_FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT;
+
+export const exportedForTesting = {
+  addRoundStrokeContour,
+};

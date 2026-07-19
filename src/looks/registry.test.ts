@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { balloonStrokeLookDefinition } from './balloonStroke';
 import { collapseLookDefinition } from './collapse';
 import { crumpleLookDefinition } from './crumple';
 import {
+  createBalloonStrokeLook,
   createCollapseLook,
   createCrumpleLook,
   effectUniformsForLook,
@@ -28,6 +30,16 @@ describe('typography look registry', () => {
     expect(changedCollapse.parameters.scatter).toBe(260);
     expect(crumple.parameters.gather).toBe(20);
     expect(invalidForCrumple).toBe(crumple);
+  });
+
+  it('gives Balloon Stroke its own technique-specific controls', () => {
+    const look = createBalloonStrokeLook();
+    const changed = updateLookParameter(look, 'balloonStroke', 999);
+
+    expect(changed.parameters.balloonStroke).toBe(64);
+    expect(balloonStrokeLookDefinition.parameters.map(({ key }) => key)).toContain('fontWeight');
+    expect(balloonStrokeLookDefinition.parameters.map(({ key }) => key)).not.toContain('showMesh');
+    expect(balloonStrokeLookDefinition.defaults.fontWeight).toBeLessThan(400);
   });
 
   it('preserves the old rigid-glyph settings as Collapse', () => {

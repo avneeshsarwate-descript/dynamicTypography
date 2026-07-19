@@ -1,5 +1,5 @@
 import { sharedLookDefaults, sharedParameterDefinitions } from './sharedParameters';
-import type { CrumpleLookParameters, LookDefinition } from './types';
+import type { CrumpleLookParameters, MeshLookDefinition } from './types';
 
 const MAX_GATHER_RADIUS = 100;
 
@@ -16,7 +16,7 @@ const defaults: CrumpleLookParameters = {
   twist: 112,
 };
 
-export const crumpleLookDefinition: LookDefinition<'crumple', CrumpleLookParameters> = {
+export const crumpleLookDefinition: MeshLookDefinition<'crumple', CrumpleLookParameters> = {
   id: 'crumple',
   number: '02',
   label: 'Crumple',

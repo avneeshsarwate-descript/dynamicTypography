@@ -1,17 +1,20 @@
-export type LookId = 'collapse' | 'crumple';
+export type LookId = 'collapse' | 'crumple' | 'balloon-stroke';
 
 export type LookParameterValue = number | string | boolean;
 
-export type SharedLookParameters = {
+export type BaseLookParameters = {
   [key: string]: LookParameterValue;
-  fontSize: number;
-  revealDuration: number;
   wordDuration: number;
   blockGap: number;
+  background: string;
+};
+
+export type SharedLookParameters = BaseLookParameters & {
+  fontSize: number;
+  revealDuration: number;
   letterSpacing: number;
   meshDensity: number;
   seed: number;
-  background: string;
   fill: string;
   activeFill: string;
   showMesh: boolean;
@@ -31,6 +34,18 @@ export type CrumpleLookParameters = SharedLookParameters & {
   twist: number;
 };
 
+export type BalloonStrokeLookParameters = BaseLookParameters & {
+  fontSize: number;
+  fontWeight: number;
+  letterSpacing: number;
+  curveDetail: number;
+  normalStroke: number;
+  balloonStroke: number;
+  peakPosition: number;
+  fill: string;
+  stroke: string;
+};
+
 export type CollapseLookState = {
   id: 'collapse';
   parameters: CollapseLookParameters;
@@ -41,7 +56,14 @@ export type CrumpleLookState = {
   parameters: CrumpleLookParameters;
 };
 
-export type LookState = CollapseLookState | CrumpleLookState;
+export type BalloonStrokeLookState = {
+  id: 'balloon-stroke';
+  parameters: BalloonStrokeLookParameters;
+};
+
+export type MeshDeformationLookState = CollapseLookState | CrumpleLookState;
+
+export type LookState = MeshDeformationLookState | BalloonStrokeLookState;
 
 export type RangeParameterDefinition<Key extends string = string> = {
   kind: 'range';
@@ -84,7 +106,7 @@ export type MeshLookParameters = {
 
 export type LookDefinition<
   Id extends LookId,
-  Parameters extends SharedLookParameters,
+  Parameters extends BaseLookParameters,
 > = {
   id: Id;
   number: string;
@@ -93,11 +115,20 @@ export type LookDefinition<
   description: string;
   defaults: Parameters;
   parameters: readonly LookParameterDefinition<Extract<keyof Parameters, string>>[];
+};
+
+export type MeshLookDefinition<
+  Id extends MeshDeformationLookState['id'],
+  Parameters extends SharedLookParameters,
+> = LookDefinition<Id, Parameters> & {
   deformationWgsl: string;
   meshParameters: (parameters: Parameters) => MeshLookParameters;
   effectUniforms: (parameters: Parameters) => readonly [number, number, number, number];
 };
 
 export type AnyLookDefinition =
-  | LookDefinition<'collapse', CollapseLookParameters>
-  | LookDefinition<'crumple', CrumpleLookParameters>;
+  | MeshLookDefinition<'collapse', CollapseLookParameters>
+  | MeshLookDefinition<'crumple', CrumpleLookParameters>
+  | LookDefinition<'balloon-stroke', BalloonStrokeLookParameters>;
+
+export type AnyMeshLookDefinition = Exclude<AnyLookDefinition, { id: 'balloon-stroke' }>;

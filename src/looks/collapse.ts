@@ -1,5 +1,5 @@
 import { sharedLookDefaults, sharedParameterDefinitions } from './sharedParameters';
-import type { CollapseLookParameters, LookDefinition } from './types';
+import type { CollapseLookParameters, MeshLookDefinition } from './types';
 
 const defaults: CollapseLookParameters = {
   ...sharedLookDefaults,
@@ -8,7 +8,7 @@ const defaults: CollapseLookParameters = {
   rotation: 190,
 };
 
-export const collapseLookDefinition: LookDefinition<'collapse', CollapseLookParameters> = {
+export const collapseLookDefinition: MeshLookDefinition<'collapse', CollapseLookParameters> = {
   id: 'collapse',
   number: '01',
   label: 'Collapse',

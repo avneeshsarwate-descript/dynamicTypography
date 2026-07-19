@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { meshParametersForLook } from '../looks/registry';
 import type { LookState } from '../looks/types';
 import type { ActiveCaptionState, CaptionDocument } from '../types';
 import { connectCaptureBridge, type CanvasCaptureRequest } from '../render/captureBridge';
-import { compileBlockMesh, loadPrototypeFont, type CompiledBlockMesh } from '../render/fontGeometry';
+import { loadPrototypeFont } from '../render/fontGeometry';
+import type { LookRenderStats } from '../render/lookRenderer';
 import { WebGpuTextRenderer } from '../render/webgpuRenderer';
 
 const props = defineProps<{
@@ -23,7 +23,7 @@ const canvas = ref<HTMLCanvasElement>();
 const stage = ref<HTMLElement>();
 const status = ref<'loading' | 'ready' | 'error'>('loading');
 const errorMessage = ref('');
-const meshStats = ref<CompiledBlockMesh>();
+const renderStats = ref<LookRenderStats>();
 const captureState = ref<'idle' | 'capturing' | 'saved'>('idle');
 
 let renderer: WebGpuTextRenderer | undefined;
@@ -37,19 +37,18 @@ const statusLabel = computed(() => {
   return `Block ${props.active.block.sourceLine + 1} · ${props.active.word?.text ?? 'settled'}`;
 });
 
-function rebuildMesh(): void {
+function rebuildLookSource(): void {
   if (!renderer || !font || !canvas.value) return;
   const width = canvas.value.clientWidth;
   const height = canvas.value.clientHeight;
-  if (!props.active.block || width === 0 || height === 0) {
-    meshStats.value = undefined;
-    renderer.setMesh(undefined);
-    renderer.render(props.time, props.look);
-    return;
-  }
-  const mesh = compileBlockMesh(font, props.active.block, props.look, width, height);
-  meshStats.value = mesh;
-  renderer.setMesh(mesh);
+  if (width === 0 || height === 0) return;
+  renderStats.value = renderer.setSource({
+    block: props.active.block,
+    font,
+    look: props.look,
+    width,
+    height,
+  });
   renderer.render(props.time, props.look);
 }
 
@@ -116,10 +115,11 @@ async function captureAt(request: CanvasCaptureRequest): Promise<Blob> {
     lookId: props.look.id,
     blockId: props.active.block?.id,
     wordId: props.active.word?.id,
-    meshBlockId: meshStats.value?.blockId,
-    glyphCount: meshStats.value?.glyphCount,
-    vertexCount: meshStats.value?.vertexCount,
-    glyphTimingStarts: meshStats.value?.glyphTimingStarts,
+    renderedBlockId: renderStats.value?.blockId,
+    technique: renderStats.value?.technique,
+    glyphCount: renderStats.value?.glyphCount,
+    vertexCount: renderStats.value?.vertexCount,
+    glyphTimingStarts: renderStats.value?.glyphTimingStarts,
   }));
   return renderer.capturePng(props.time, props.look);
 }
@@ -130,12 +130,12 @@ onMounted(async () => {
   try {
     [renderer, font] = await Promise.all([
       WebGpuTextRenderer.create(canvas.value),
-      loadPrototypeFont('/Sora-Bold.ttf'),
+      loadPrototypeFont('/Sora-Variable.ttf'),
     ]);
     const resize = (): void => {
       if (!canvas.value || !renderer) return;
       const changed = renderer.resize(canvas.value.clientWidth, canvas.value.clientHeight);
-      if (changed) rebuildMesh();
+      if (changed) rebuildLookSource();
       else render();
     };
     resizeObserver = new ResizeObserver(resize);
@@ -157,19 +157,9 @@ watch(
     () => props.document.revision,
     () => props.active.block?.id,
     () => props.look.id,
-    () => JSON.stringify(meshParametersForLook(props.look)),
+    () => JSON.stringify(props.look.parameters),
   ],
-  rebuildMesh,
-);
-watch(
-  [
-    () => props.look.parameters.revealDuration,
-    () => props.look.parameters.background,
-    () => props.look.parameters.fill,
-    () => props.look.parameters.activeFill,
-    () => props.look.parameters.showMesh,
-  ],
-  render,
+  rebuildLookSource,
 );
 
 onBeforeUnmount(() => {
@@ -193,7 +183,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="canvas-chrome canvas-footer">
-      <span v-if="meshStats">{{ meshStats.glyphCount }} glyphs · {{ meshStats.triangleCount.toLocaleString() }} triangles</span>
+      <span v-if="renderStats">{{ renderStats.glyphCount }} glyphs · {{ renderStats.triangleCount.toLocaleString() }} triangles · {{ renderStats.technique }}</span>
       <span v-else>Raw WebGPU stage</span>
       <button type="button" :disabled="status !== 'ready' || captureState === 'capturing'" data-testid="download-screenshot" @click="downloadScreenshot">
         {{ captureState === 'capturing' ? 'Capturing…' : captureState === 'saved' ? 'PNG saved' : 'Save frame' }}

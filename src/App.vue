@@ -4,6 +4,7 @@ import DisplayCanvas from './components/DisplayCanvas.vue';
 import Playhead from './components/Playhead.vue';
 import TextEditor from './components/TextEditor.vue';
 import {
+  createBalloonStrokeLook,
   createCollapseLook,
   createCrumpleLook,
 } from './looks/registry';
@@ -16,10 +17,13 @@ Motion makes language physical.`);
 
 const collapseLook = ref(createCollapseLook());
 const crumpleLook = ref(createCrumpleLook());
+const balloonStrokeLook = ref(createBalloonStrokeLook());
 const selectedLookId = ref<LookId>('collapse');
-const look = computed<LookState>(() => (
-  selectedLookId.value === 'collapse' ? collapseLook.value : crumpleLook.value
-));
+const look = computed<LookState>(() => {
+  if (selectedLookId.value === 'collapse') return collapseLook.value;
+  if (selectedLookId.value === 'crumple') return crumpleLook.value;
+  return balloonStrokeLook.value;
+});
 
 const revision = ref(1);
 const time = ref(0);
@@ -76,7 +80,8 @@ function updateText(value: string): void {
 
 function updateLook(value: LookState): void {
   if (value.id === 'collapse') collapseLook.value = value;
-  else crumpleLook.value = value;
+  else if (value.id === 'crumple') crumpleLook.value = value;
+  else balloonStrokeLook.value = value;
 }
 
 function selectLook(id: LookId): void {
@@ -118,7 +123,7 @@ onBeforeUnmount(() => {
         <div class="brand-mark" aria-hidden="true"><i /><i /><i /></div>
         <div>
           <p>DYNAMIC TYPOGRAPHY LAB</p>
-          <span>Font outlines → Paper paths → non-zero tessellation → WebGPU</span>
+          <span>Caption / TAU model → modular look renderers → flat WebGPU frames</span>
         </div>
       </div>
       <div class="prototype-badge"><i /> Live prototype</div>

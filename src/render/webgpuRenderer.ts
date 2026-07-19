@@ -1,122 +1,29 @@
-import { effectUniformsForLook, lookDefinitions } from '../looks/registry';
-import type { AnyLookDefinition, LookId, LookState } from '../looks/types';
-import type { CompiledBlockMesh } from './fontGeometry';
-import { vertexStrideBytes } from './fontGeometry';
+import { collapseLookDefinition } from '../looks/collapse';
+import { crumpleLookDefinition } from '../looks/crumple';
+import type { LookId, LookState } from '../looks/types';
+import { BalloonStrokeRenderer } from './balloonStrokeRenderer';
+import type {
+  LookRenderSource,
+  LookRenderer,
+  LookRenderStats,
+} from './lookRenderer';
+import { MeshDeformationRenderer } from './meshDeformationRenderer';
+import { withTimeout } from './webgpuUtilities';
 
-function shaderForLook(look: AnyLookDefinition): string {
-  return /* wgsl */ `
-struct Globals {
-  viewport: vec2f,
-  time: f32,
-  revealDuration: f32,
-  fill: vec4f,
-  activeFill: vec4f,
-  showMesh: f32,
-  meshOpacity: f32,
-  padding: vec2f,
-  effect: vec4f,
-}
-
-@group(0) @binding(0) var<uniform> globals: Globals;
-
-struct VertexInput {
-  @location(0) position: vec2f,
-  @location(1) glyphCenter: vec2f,
-  @location(2) effectCenter: vec2f,
-  @location(3) deformation: vec2f,
-  @location(4) timing: vec2f,
-  @location(5) barycentric: vec3f,
-  @location(6) random: f32,
-}
-
-struct VertexOutput {
-  @builtin(position) position: vec4f,
-  @location(0) barycentric: vec3f,
-  @location(1) activeWord: f32,
-  @location(2) progress: f32,
-}
-
-fn smootherstep(value: f32) -> f32 {
-  return value * value * (3.0 - 2.0 * value);
-}
-
-${look.deformationWgsl}
-
-@vertex
-fn vertexMain(input: VertexInput) -> VertexOutput {
-  let rawProgress = clamp((globals.time - input.timing.x) / max(globals.revealDuration, 0.001), 0.0, 1.0);
-  let progress = smootherstep(rawProgress);
-  let world = deformGlyph(input, progress);
-  let clip = vec2f(
-    world.x / globals.viewport.x * 2.0 - 1.0,
-    1.0 - world.y / globals.viewport.y * 2.0,
-  );
-  let isActive = select(0.0, 1.0, globals.time >= input.timing.x && globals.time < input.timing.y);
-
-  var output: VertexOutput;
-  output.position = vec4f(clip, 0.0, 1.0);
-  output.barycentric = input.barycentric;
-  output.activeWord = isActive;
-  output.progress = progress;
-  return output;
-}
-
-@fragment
-fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
-  let base = mix(globals.fill, globals.activeFill, input.activeWord);
-  let edgeDistance = min(input.barycentric.x, min(input.barycentric.y, input.barycentric.z));
-  let edge = 1.0 - smoothstep(0.0, fwidth(edgeDistance) * 1.15, edgeDistance);
-  let meshColor = vec4f(0.35, 0.47, 1.0, 1.0);
-  let meshMix = edge * globals.showMesh * globals.meshOpacity;
-  return mix(base, meshColor, meshMix);
-}
-`;
-}
-
-function colorComponents(value: string): [number, number, number, number] {
-  const normalized = value.replace('#', '').trim();
-  const expanded = normalized.length === 3
-    ? normalized.split('').map((character) => `${character}${character}`).join('')
-    : normalized;
-  const number = Number.parseInt(expanded, 16);
-  if (!Number.isFinite(number) || expanded.length !== 6) return [1, 1, 1, 1];
-  return [
-    ((number >> 16) & 255) / 255,
-    ((number >> 8) & 255) / 255,
-    (number & 255) / 255,
-    1,
-  ];
-}
-
-function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timeout = window.setTimeout(() => reject(new Error(message)), milliseconds);
-    promise.then(
-      (value) => {
-        window.clearTimeout(timeout);
-        resolve(value);
-      },
-      (error: unknown) => {
-        window.clearTimeout(timeout);
-        reject(error);
-      },
-    );
-  });
-}
-
+/**
+ * Owns only the GPU device, canvas target, capture target, and look selection.
+ * Technique-specific geometry and draw passes live behind LookRenderer.
+ */
 export class WebGpuTextRenderer {
   private constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly device: GPUDevice,
     private readonly context: GPUCanvasContext,
-    private readonly pipelines: ReadonlyMap<LookId, GPURenderPipeline>,
-    private readonly globalsBuffer: GPUBuffer,
-    private readonly bindGroup: GPUBindGroup,
+    private readonly renderers: ReadonlyMap<LookId, LookRenderer>,
     private readonly format: GPUTextureFormat,
   ) {}
 
-  private vertexBuffer: GPUBuffer | undefined;
-  private vertexCount = 0;
+  private activeRenderer: LookRenderer | undefined;
 
   static async create(canvas: HTMLCanvasElement): Promise<WebGpuTextRenderer> {
     if (!navigator.gpu) throw new Error('WebGPU is not available in this browser');
@@ -132,68 +39,16 @@ export class WebGpuTextRenderer {
       alphaMode: 'premultiplied',
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
-
-    const globalsBuffer = device.createBuffer({
-      label: 'render globals',
-      size: 80,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    const bindGroupLayout = device.createBindGroupLayout({
-      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }],
-    });
-    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
-    const pipelineEntries = await Promise.all(lookDefinitions.map(async (look) => {
-      const module = device.createShaderModule({
-        code: shaderForLook(look),
-        label: `${look.label} typography shader`,
-      });
-      const shaderInfo = await module.getCompilationInfo();
-      const shaderErrors = shaderInfo.messages.filter((message) => message.type === 'error');
-      if (shaderErrors.length) {
-        throw new Error(shaderErrors.map(
-          (message) => `${look.label} WGSL ${message.lineNum}:${message.linePos} ${message.message}`,
-        ).join('\n'));
-      }
-      const pipeline = await device.createRenderPipelineAsync({
-        label: `${look.label} typography pipeline`,
-        layout: pipelineLayout,
-        vertex: {
-          module,
-          entryPoint: 'vertexMain',
-          buffers: [{
-            arrayStride: vertexStrideBytes,
-            attributes: [
-              { shaderLocation: 0, offset: 0, format: 'float32x2' },
-              { shaderLocation: 1, offset: 8, format: 'float32x2' },
-              { shaderLocation: 2, offset: 16, format: 'float32x2' },
-              { shaderLocation: 3, offset: 24, format: 'float32x2' },
-              { shaderLocation: 4, offset: 32, format: 'float32x2' },
-              { shaderLocation: 5, offset: 40, format: 'float32x3' },
-              { shaderLocation: 6, offset: 52, format: 'float32' },
-            ],
-          }],
-        },
-        fragment: {
-          module,
-          entryPoint: 'fragmentMain',
-          targets: [{
-            format,
-            blend: {
-              color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' },
-              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' },
-            },
-          }],
-        },
-        primitive: { topology: 'triangle-list' },
-      });
-      return [look.id, pipeline] as const;
-    }));
-    const pipelines = new Map<LookId, GPURenderPipeline>(pipelineEntries);
-    const bindGroup = device.createBindGroup({
-      layout: bindGroupLayout,
-      entries: [{ binding: 0, resource: { buffer: globalsBuffer } }],
-    });
-    return new WebGpuTextRenderer(canvas, device, context, pipelines, globalsBuffer, bindGroup, format);
+    const renderContext = { device, format };
+    const runtimeEntries = await Promise.all([
+      MeshDeformationRenderer.create(renderContext, collapseLookDefinition),
+      MeshDeformationRenderer.create(renderContext, crumpleLookDefinition),
+      BalloonStrokeRenderer.create(renderContext),
+    ]);
+    const renderers = new Map<LookId, LookRenderer>(
+      runtimeEntries.map((renderer) => [renderer.lookId, renderer]),
+    );
+    return new WebGpuTextRenderer(canvas, device, context, renderers, format);
   }
 
   resize(width: number, height: number): boolean {
@@ -206,62 +61,24 @@ export class WebGpuTextRenderer {
     return true;
   }
 
-  setMesh(mesh: CompiledBlockMesh | undefined): void {
-    this.vertexBuffer?.destroy();
-    this.vertexBuffer = undefined;
-    this.vertexCount = mesh?.vertexCount ?? 0;
-    if (!mesh?.vertices.byteLength) return;
-    this.vertexBuffer = this.device.createBuffer({
-      label: `caption block ${mesh.blockId}`,
-      size: mesh.vertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(this.vertexBuffer, 0, mesh.vertices);
+  setSource(source: LookRenderSource): LookRenderStats | undefined {
+    const renderer = this.renderers.get(source.look.id);
+    if (!renderer) throw new Error(`No renderer is registered for ${source.look.id}`);
+    this.activeRenderer = renderer;
+    return renderer.setSource(source);
   }
 
-  private encodeFrame(time: number, look: LookState, texture: GPUTexture): GPUCommandEncoder {
-    const parameters = look.parameters;
-    const fill = colorComponents(parameters.fill);
-    const activeFill = colorComponents(parameters.activeFill);
-    const effect = effectUniformsForLook(look);
-    const globals = new Float32Array([
-      this.canvas.clientWidth,
-      this.canvas.clientHeight,
-      time,
-      parameters.revealDuration,
-      ...fill,
-      ...activeFill,
-      parameters.showMesh ? 1 : 0,
-      0.68,
-      0,
-      0,
-      ...effect,
-    ]);
-    this.device.queue.writeBuffer(this.globalsBuffer, 0, globals);
-    const encoder = this.device.createCommandEncoder();
-    const pass = encoder.beginRenderPass({
-      colorAttachments: [{
-        view: texture.createView(),
-        clearValue: colorComponents(parameters.background),
-        loadOp: 'clear',
-        storeOp: 'store',
-      }],
-    });
-    if (this.vertexBuffer && this.vertexCount > 0) {
-      const pipeline = this.pipelines.get(look.id);
-      if (!pipeline) throw new Error(`No WebGPU pipeline exists for ${look.id}`);
-      pass.setPipeline(pipeline);
-      pass.setBindGroup(0, this.bindGroup);
-      pass.setVertexBuffer(0, this.vertexBuffer);
-      pass.draw(this.vertexCount);
+  private encodeFrame(time: number, look: LookState, output: GPUTexture): GPUCommandBuffer {
+    const renderer = this.activeRenderer;
+    if (!renderer || renderer.lookId !== look.id) {
+      throw new Error(`The ${look.id} look has not received its caption source`);
     }
-    pass.end();
-    return encoder;
+    return renderer.encode({ time, look, output });
   }
 
   render(time: number, look: LookState): void {
-    const encoder = this.encodeFrame(time, look, this.context.getCurrentTexture());
-    this.device.queue.submit([encoder.finish()]);
+    const command = this.encodeFrame(time, look, this.context.getCurrentTexture());
+    this.device.queue.submit([command]);
   }
 
   async capturePng(time: number, look: LookState): Promise<Blob> {
@@ -269,26 +86,27 @@ export class WebGpuTextRenderer {
     const width = this.canvas.width;
     const height = this.canvas.height;
     const texture = this.device.createTexture({
-      label: 'canvas capture target',
+      label: 'look capture target',
       size: { width, height },
       format: this.format,
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
-    const encoder = this.encodeFrame(time, look, texture);
+    const command = this.encodeFrame(time, look, texture);
     const bytesPerPixel = 4;
     const unpaddedBytesPerRow = width * bytesPerPixel;
     const bytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
     const readback = this.device.createBuffer({
-      label: 'canvas capture readback',
+      label: 'look capture readback',
       size: bytesPerRow * height,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
+    const encoder = this.device.createCommandEncoder();
     encoder.copyTextureToBuffer(
       { texture },
       { buffer: readback, bytesPerRow, rowsPerImage: height },
       { width, height, depthOrArrayLayers: 1 },
     );
-    this.device.queue.submit([encoder.finish()]);
+    this.device.queue.submit([command, encoder.finish()]);
     const validationError = await this.device.popErrorScope();
     if (validationError) {
       readback.destroy();
@@ -322,14 +140,13 @@ export class WebGpuTextRenderer {
     texture.destroy();
 
     const bitmap = new OffscreenCanvas(width, height);
-    const context = bitmap.getContext('2d');
-    if (!context) throw new Error('Could not create a canvas encoder');
-    context.putImageData(new ImageData(pixels, width, height), 0, 0);
+    const bitmapContext = bitmap.getContext('2d');
+    if (!bitmapContext) throw new Error('Could not create a canvas encoder');
+    bitmapContext.putImageData(new ImageData(pixels, width, height), 0, 0);
     return bitmap.convertToBlob({ type: 'image/png' });
   }
 
   destroy(): void {
-    this.vertexBuffer?.destroy();
-    this.globalsBuffer.destroy();
+    for (const renderer of this.renderers.values()) renderer.destroy();
   }
 }

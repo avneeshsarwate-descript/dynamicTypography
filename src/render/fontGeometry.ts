@@ -1,9 +1,10 @@
 import * as fontkit from 'fontkit';
 import { meshParametersForLook } from '../looks/registry';
-import type { LookState } from '../looks/types';
+import type { MeshDeformationLookState } from '../looks/types';
 import type { CaptionBlock } from '../types';
 import { flattenedClone, fontPathToPaper } from './paperGeometry';
 import { triangulateCompoundPath } from './meshCompiler';
+import { fontAtWeight } from './fontVariations';
 
 const FLOATS_PER_VERTEX = 14;
 
@@ -16,12 +17,14 @@ export type CompiledBlockMesh = {
   glyphTimingStarts: number[];
 };
 
-type LoadedFont = fontkit.Font;
+export type LoadedFont = fontkit.Font;
 
-let cachedFont: Promise<LoadedFont> | undefined;
+const cachedFonts = new Map<string, Promise<LoadedFont>>();
 
 export function loadPrototypeFont(url: string): Promise<LoadedFont> {
-  cachedFont ??= fetch(url)
+  const existing = cachedFonts.get(url);
+  if (existing) return existing;
+  const pending = fetch(url)
     .then((response) => {
       if (!response.ok) throw new Error(`Could not load prototype font (${response.status})`);
       return response.arrayBuffer();
@@ -29,7 +32,9 @@ export function loadPrototypeFont(url: string): Promise<LoadedFont> {
     .then((buffer) => fontkit.create(
       new Uint8Array(buffer) as unknown as Parameters<typeof fontkit.create>[0],
     ) as fontkit.Font);
-  return cachedFont;
+  cachedFonts.set(url, pending);
+  void pending.catch(() => cachedFonts.delete(url));
+  return pending;
 }
 
 function hashNoise(seed: number): number {
@@ -49,9 +54,9 @@ function wordIndexForOffset(block: CaptionBlock, offset: number): number {
 }
 
 export function compileBlockMesh(
-  font: LoadedFont,
+  sourceFont: LoadedFont,
   block: CaptionBlock,
-  look: LookState,
+  look: MeshDeformationLookState,
   width: number,
   height: number,
 ): CompiledBlockMesh {
@@ -67,6 +72,7 @@ export function compileBlockMesh(
   }
 
   const parameters = meshParametersForLook(look);
+  const font = fontAtWeight(sourceFont, 700);
   const run = font.layout(block.text);
   const scale = parameters.fontSize / font.unitsPerEm;
   const advances = run.positions.map((position) => position.xAdvance * scale + parameters.letterSpacing);

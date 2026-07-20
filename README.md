@@ -10,11 +10,12 @@ Collapse and Crumple use a rendering path deliberately close to the proposed tex
 4. Triangle vertices carry glyph centers, randomized effect centers, word timing, and barycentric coordinates.
 5. A raw WebGPU vertex shader resolves each word when its word timing becomes active.
 
-The look registry currently contains three independently parameterized effects:
+The look registry currently contains four independently parameterized effects:
 
 - **Collapse** preserves each glyph as a rigid shape while it scales, rotates, and moves out from a common cluster.
 - **Crumple** applies position-dependent fold fields to individual mesh vertices, genuinely distorting the glyph before returning every vertex to the original font outline.
 - **Balloon Stroke** renders a thin variable-font fill plus a parametric contour stroke. Offset strips and round exterior joins expand in the vertex shader while future words remain un-stroked and completed words retain a narrow outline.
+- **Elastic** displays the complete outlined line immediately, then scales each active word’s fill and stroke around its visual centroid through a fixed-time pull and closed-form underdamped spring release. Overlong spring tails receive a smooth forced settle during the final 10% of the word timing.
 
 In Crumple, **Gather radius** controls the whole initial bundle: glyph-center scatter, compressed outline size, and fold displacement all approach zero together at the word's final centroid.
 
@@ -39,6 +40,6 @@ curl 'http://127.0.0.1:4173/__canvas-capture?time=0.5' --output frame.png
 
 The request waits while the live page seeks, renders the WebGPU canvas, and returns its PNG bytes. The bridge only exists in Vite development mode.
 
-Pass `look=collapse`, `look=crumple`, or `look=balloon-stroke` to switch the live page before capture, for example `?look=balloon-stroke&time=0.25`.
+Pass `look=collapse`, `look=crumple`, `look=balloon-stroke`, or `look=elastic` to switch the live page before capture, for example `?look=elastic&time=0.25`.
 
 For multiple open tabs, give a page a client key such as `?captureClient=my-test`, then route the request with `&client=my-test`.

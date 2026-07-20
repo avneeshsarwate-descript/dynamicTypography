@@ -2,6 +2,7 @@ import { collapseLookDefinition } from '../looks/collapse';
 import { crumpleLookDefinition } from '../looks/crumple';
 import type { LookId, LookState } from '../looks/types';
 import { BalloonStrokeRenderer } from './balloonStrokeRenderer';
+import { ElasticRenderer } from './elasticRenderer';
 import type {
   LookRenderSource,
   LookRenderer,
@@ -47,6 +48,7 @@ export class WebGpuTextRenderer {
       MeshDeformationRenderer.create(renderContext, collapseLookDefinition),
       MeshDeformationRenderer.create(renderContext, crumpleLookDefinition),
       BalloonStrokeRenderer.create(renderContext),
+      ElasticRenderer.create(renderContext),
     ]);
     const renderers = new Map<LookId, LookRenderer>(
       runtimeEntries.map((renderer) => [renderer.lookId, renderer]),

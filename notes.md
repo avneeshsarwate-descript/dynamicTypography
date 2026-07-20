@@ -1,1 +1,3 @@
 - original look uses vertex shader to calculate crumple/uncrumple - do we want this in shader, or in cpu land?
+
+- for elastic look, it's a spring simulation - but how much do we want motion to be uniform despite TAU length? if the oscillation tail is longer than the TAU, do we force-dampen it? does detecting that require more complicated architecture or is it deriveable from a closed form formula and the parameters passed in

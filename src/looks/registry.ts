@@ -1,12 +1,14 @@
 import { balloonStrokeLookDefinition } from './balloonStroke';
 import { collapseLookDefinition } from './collapse';
 import { crumpleLookDefinition } from './crumple';
+import { elasticLookDefinition } from './elastic';
 import type {
   BalloonStrokeLookState,
   BaseLookParameters,
   AnyLookDefinition,
   CollapseLookState,
   CrumpleLookState,
+  ElasticLookState,
   LookId,
   LookParameterDefinition,
   LookParameterValue,
@@ -19,12 +21,14 @@ export const lookDefinitions = [
   collapseLookDefinition,
   crumpleLookDefinition,
   balloonStrokeLookDefinition,
+  elasticLookDefinition,
 ] as const;
 
 export function lookDefinitionFor(id: LookId): AnyLookDefinition {
   if (id === 'collapse') return collapseLookDefinition;
   if (id === 'crumple') return crumpleLookDefinition;
-  return balloonStrokeLookDefinition;
+  if (id === 'balloon-stroke') return balloonStrokeLookDefinition;
+  return elasticLookDefinition;
 }
 
 export function createCollapseLook(): CollapseLookState {
@@ -37,6 +41,10 @@ export function createCrumpleLook(): CrumpleLookState {
 
 export function createBalloonStrokeLook(): BalloonStrokeLookState {
   return { id: 'balloon-stroke', parameters: { ...balloonStrokeLookDefinition.defaults } };
+}
+
+export function createElasticLook(): ElasticLookState {
+  return { id: 'elastic', parameters: { ...elasticLookDefinition.defaults } };
 }
 
 export function meshParametersForLook(look: MeshDeformationLookState): MeshLookParameters {
@@ -96,6 +104,11 @@ export function updateLookParameter(
   rawValue: LookParameterValue,
 ): BalloonStrokeLookState;
 export function updateLookParameter(
+  look: ElasticLookState,
+  key: string,
+  rawValue: LookParameterValue,
+): ElasticLookState;
+export function updateLookParameter(
   look: LookState,
   key: string,
   rawValue: LookParameterValue,
@@ -111,5 +124,8 @@ export function updateLookParameter(
   if (look.id === 'crumple') {
     return updateDefinedParameter(look, crumpleLookDefinition.parameters, key, rawValue);
   }
-  return updateDefinedParameter(look, balloonStrokeLookDefinition.parameters, key, rawValue);
+  if (look.id === 'balloon-stroke') {
+    return updateDefinedParameter(look, balloonStrokeLookDefinition.parameters, key, rawValue);
+  }
+  return updateDefinedParameter(look, elasticLookDefinition.parameters, key, rawValue);
 }

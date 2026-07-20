@@ -7,6 +7,7 @@ import {
   createBalloonStrokeLook,
   createCollapseLook,
   createCrumpleLook,
+  createElasticLook,
 } from './looks/registry';
 import type { LookId, LookState } from './looks/types';
 import { activeCaptionAt, buildCaptionDocument } from './model/captionDocument';
@@ -18,11 +19,13 @@ Motion makes language physical.`);
 const collapseLook = ref(createCollapseLook());
 const crumpleLook = ref(createCrumpleLook());
 const balloonStrokeLook = ref(createBalloonStrokeLook());
+const elasticLook = ref(createElasticLook());
 const selectedLookId = ref<LookId>('collapse');
 const look = computed<LookState>(() => {
   if (selectedLookId.value === 'collapse') return collapseLook.value;
   if (selectedLookId.value === 'crumple') return crumpleLook.value;
-  return balloonStrokeLook.value;
+  if (selectedLookId.value === 'balloon-stroke') return balloonStrokeLook.value;
+  return elasticLook.value;
 });
 
 const revision = ref(1);
@@ -81,7 +84,8 @@ function updateText(value: string): void {
 function updateLook(value: LookState): void {
   if (value.id === 'collapse') collapseLook.value = value;
   else if (value.id === 'crumple') crumpleLook.value = value;
-  else balloonStrokeLook.value = value;
+  else if (value.id === 'balloon-stroke') balloonStrokeLook.value = value;
+  else elasticLook.value = value;
 }
 
 function selectLook(id: LookId): void {

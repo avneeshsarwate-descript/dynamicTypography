@@ -1,4 +1,4 @@
-export type LookId = 'collapse' | 'crumple' | 'balloon-stroke';
+export type LookId = 'collapse' | 'crumple' | 'balloon-stroke' | 'elastic';
 
 export type LookParameterValue = number | string | boolean;
 
@@ -46,6 +46,20 @@ export type BalloonStrokeLookParameters = BaseLookParameters & {
   stroke: string;
 };
 
+export type ElasticLookParameters = BaseLookParameters & {
+  fontSize: number;
+  fontWeight: number;
+  letterSpacing: number;
+  curveDetail: number;
+  strokeWidth: number;
+  peakScale: number;
+  pullDuration: number;
+  frequency: number;
+  dampingRatio: number;
+  fill: string;
+  stroke: string;
+};
+
 export type CollapseLookState = {
   id: 'collapse';
   parameters: CollapseLookParameters;
@@ -61,9 +75,14 @@ export type BalloonStrokeLookState = {
   parameters: BalloonStrokeLookParameters;
 };
 
+export type ElasticLookState = {
+  id: 'elastic';
+  parameters: ElasticLookParameters;
+};
+
 export type MeshDeformationLookState = CollapseLookState | CrumpleLookState;
 
-export type LookState = MeshDeformationLookState | BalloonStrokeLookState;
+export type LookState = MeshDeformationLookState | BalloonStrokeLookState | ElasticLookState;
 
 export type RangeParameterDefinition<Key extends string = string> = {
   kind: 'range';
@@ -129,6 +148,10 @@ export type MeshLookDefinition<
 export type AnyLookDefinition =
   | MeshLookDefinition<'collapse', CollapseLookParameters>
   | MeshLookDefinition<'crumple', CrumpleLookParameters>
-  | LookDefinition<'balloon-stroke', BalloonStrokeLookParameters>;
+  | LookDefinition<'balloon-stroke', BalloonStrokeLookParameters>
+  | LookDefinition<'elastic', ElasticLookParameters>;
 
-export type AnyMeshLookDefinition = Exclude<AnyLookDefinition, { id: 'balloon-stroke' }>;
+export type AnyMeshLookDefinition = Extract<
+  AnyLookDefinition,
+  { id: MeshDeformationLookState['id'] }
+>;

@@ -6,7 +6,7 @@ type CaptureCommand = {
   id: string;
   client: string;
   time?: number;
-  look?: 'collapse' | 'crumple' | 'balloon-stroke';
+  look?: 'collapse' | 'crumple' | 'balloon-stroke' | 'elastic';
 };
 
 type PagePoll = {
@@ -18,7 +18,7 @@ type PendingCapture = {
   response: ServerResponse;
   timeout: ReturnType<typeof setTimeout>;
   time?: number;
-  look?: 'collapse' | 'crumple' | 'balloon-stroke';
+  look?: 'collapse' | 'crumple' | 'balloon-stroke' | 'elastic';
 };
 
 function readRequest(request: IncomingMessage): Promise<Buffer> {
@@ -179,8 +179,9 @@ function captureBridge(): Plugin {
             && look !== 'collapse'
             && look !== 'crumple'
             && look !== 'balloon-stroke'
+            && look !== 'elastic'
           ) {
-            json(response, 400, { error: 'look must be collapse, crumple, or balloon-stroke' });
+            json(response, 400, { error: 'look must be collapse, crumple, balloon-stroke, or elastic' });
             return;
           }
 

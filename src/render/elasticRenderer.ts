@@ -1,10 +1,11 @@
-import { balloonStrokeLookDefinition } from '../looks/balloonStroke';
-import type { BalloonStrokeLookState } from '../looks/types';
+import { elasticLookDefinition } from '../looks/elastic';
+import type { ElasticLookState } from '../looks/types';
+import { elasticScaleWgsl } from './elasticAnimation';
 import {
-  compileBalloonStrokeMesh,
+  compileFillStrokeMesh,
   fillVertexStrideBytes,
   strokeVertexStrideBytes,
-} from './balloonStrokeGeometry';
+} from './fillStrokeGeometry';
 import type {
   LookRenderContext,
   LookRenderFrame,
@@ -18,10 +19,11 @@ const shader = /* wgsl */ `
 struct Globals {
   viewport: vec2f,
   time: f32,
-  normalStroke: f32,
-  balloonStroke: f32,
-  peakPosition: f32,
-  padding: vec2f,
+  strokeWidth: f32,
+  peakScale: f32,
+  pullDuration: f32,
+  frequency: f32,
+  dampingRatio: f32,
   fill: vec4f,
   stroke: vec4f,
 }
@@ -41,10 +43,6 @@ struct FillInput {
   @location(2) timing: vec2f,
 }
 
-fn smootherstep(value: f32) -> f32 {
-  return value * value * (3.0 - 2.0 * value);
-}
-
 fn toClip(position: vec2f) -> vec4f {
   return vec4f(
     position.x / globals.viewport.x * 2.0 - 1.0,
@@ -54,33 +52,21 @@ fn toClip(position: vec2f) -> vec4f {
   );
 }
 
-fn strokeWidth(timing: vec2f) -> f32 {
-  if (globals.time < timing.x) {
-    return 0.0;
-  }
-  if (globals.time >= timing.y) {
-    return globals.normalStroke;
-  }
-  let progress = clamp((globals.time - timing.x) / max(0.001, timing.y - timing.x), 0.0, 1.0);
-  let peak = clamp(globals.peakPosition, 0.01, 0.99);
-  if (progress < peak) {
-    return globals.balloonStroke * smootherstep(progress / peak);
-  }
-  return mix(
-    globals.balloonStroke,
-    globals.normalStroke,
-    smootherstep((progress - peak) / (1.0 - peak)),
-  );
+${elasticScaleWgsl}
+
+fn scaleAroundWord(position: vec2f, center: vec2f, timing: vec2f) -> vec2f {
+  return center + (position - center) * elasticScale(timing);
 }
 
 @vertex
 fn strokeVertex(input: StrokeInput) -> @builtin(position) vec4f {
-  return toClip(input.basePosition + input.extrusion * strokeWidth(input.timing));
+  let outlined = input.basePosition + input.extrusion * globals.strokeWidth;
+  return toClip(scaleAroundWord(outlined, input.wordCenter, input.timing));
 }
 
 @vertex
 fn fillVertex(input: FillInput) -> @builtin(position) vec4f {
-  return toClip(input.position);
+  return toClip(scaleAroundWord(input.position, input.wordCenter, input.timing));
 }
 
 @fragment
@@ -94,13 +80,13 @@ fn fillFragment() -> @location(0) vec4f {
 }
 `;
 
-function isBalloonStrokeLook(
+function isElasticLook(
   look: LookRenderSource['look'] | LookRenderFrame['look'],
-): look is BalloonStrokeLookState {
-  return look.id === 'balloon-stroke';
+): look is ElasticLookState {
+  return look.id === 'elastic';
 }
 
-export class BalloonStrokeRenderer implements LookRenderer {
+export class ElasticRenderer implements LookRenderer {
   private constructor(
     private readonly context: LookRenderContext,
     private readonly strokePipeline: GPURenderPipeline,
@@ -109,7 +95,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
     private readonly bindGroup: GPUBindGroup,
   ) {}
 
-  readonly lookId = 'balloon-stroke' as const;
+  readonly lookId = 'elastic' as const;
   private fillBuffer: GPUBuffer | undefined;
   private strokeBuffer: GPUBuffer | undefined;
   private fillVertexCount = 0;
@@ -119,20 +105,20 @@ export class BalloonStrokeRenderer implements LookRenderer {
   private width = 1;
   private height = 1;
 
-  static async create(context: LookRenderContext): Promise<BalloonStrokeRenderer> {
+  static async create(context: LookRenderContext): Promise<ElasticRenderer> {
     const module = context.device.createShaderModule({
       code: shader,
-      label: `${balloonStrokeLookDefinition.label} shader`,
+      label: `${elasticLookDefinition.label} shader`,
     });
     const info = await module.getCompilationInfo();
     const errors = info.messages.filter((message) => message.type === 'error');
     if (errors.length) {
       throw new Error(errors.map(
-        (message) => `Balloon Stroke WGSL ${message.lineNum}:${message.linePos} ${message.message}`,
+        (message) => `Elastic WGSL ${message.lineNum}:${message.linePos} ${message.message}`,
       ).join('\n'));
     }
     const globalsBuffer = context.device.createBuffer({
-      label: 'Balloon Stroke globals',
+      label: 'Elastic globals',
       size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
@@ -146,7 +132,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
     const layout = context.device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
     const [strokePipeline, fillPipeline] = await Promise.all([
       context.device.createRenderPipelineAsync({
-        label: 'Balloon Stroke outline pipeline',
+        label: 'Elastic outline pipeline',
         layout,
         vertex: {
           module,
@@ -166,7 +152,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
         multisample: { count: context.sampleCount },
       }),
       context.device.createRenderPipelineAsync({
-        label: 'Balloon Stroke fill pipeline',
+        label: 'Elastic fill pipeline',
         layout,
         vertex: {
           module,
@@ -189,7 +175,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
       layout: bindGroupLayout,
       entries: [{ binding: 0, resource: { buffer: globalsBuffer } }],
     });
-    return new BalloonStrokeRenderer(
+    return new ElasticRenderer(
       context,
       strokePipeline,
       fillPipeline,
@@ -199,8 +185,8 @@ export class BalloonStrokeRenderer implements LookRenderer {
   }
 
   setSource(source: LookRenderSource): LookRenderStats | undefined {
-    if (!isBalloonStrokeLook(source.look)) {
-      throw new Error(`Balloon Stroke renderer received ${source.look.id}`);
+    if (!isElasticLook(source.look)) {
+      throw new Error(`Elastic renderer received ${source.look.id}`);
     }
     this.width = source.width;
     this.height = source.height;
@@ -225,7 +211,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
     this.stats = undefined;
     if (!source.block) return undefined;
 
-    const mesh = compileBalloonStrokeMesh(
+    const mesh = compileFillStrokeMesh(
       source.font,
       source.block,
       parameters,
@@ -236,7 +222,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
     this.strokeVertexCount = mesh.strokeVertexCount;
     if (mesh.fillVertices.byteLength) {
       this.fillBuffer = this.context.device.createBuffer({
-        label: `Balloon Stroke fill ${mesh.blockId}`,
+        label: `Elastic fill ${mesh.blockId}`,
         size: mesh.fillVertices.byteLength,
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       });
@@ -244,7 +230,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
     }
     if (mesh.strokeVertices.byteLength) {
       this.strokeBuffer = this.context.device.createBuffer({
-        label: `Balloon Stroke outline ${mesh.blockId}`,
+        label: `Elastic outline ${mesh.blockId}`,
         size: mesh.strokeVertices.byteLength,
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       });
@@ -252,7 +238,7 @@ export class BalloonStrokeRenderer implements LookRenderer {
     }
     this.stats = {
       blockId: mesh.blockId,
-      technique: 'parametric contour stroke + fill mesh',
+      technique: 'elastic fill + contour stroke mesh',
       glyphCount: mesh.glyphCount,
       triangleCount: mesh.triangleCount,
       vertexCount: mesh.fillVertexCount + mesh.strokeVertexCount,
@@ -262,19 +248,19 @@ export class BalloonStrokeRenderer implements LookRenderer {
   }
 
   encode(frame: LookRenderFrame): GPUCommandBuffer {
-    if (!isBalloonStrokeLook(frame.look)) {
-      throw new Error(`Balloon Stroke renderer received ${frame.look.id}`);
+    if (!isElasticLook(frame.look)) {
+      throw new Error(`Elastic renderer received ${frame.look.id}`);
     }
     const parameters = frame.look.parameters;
     const globals = new Float32Array([
       this.width,
       this.height,
       frame.time,
-      parameters.normalStroke,
-      parameters.balloonStroke,
-      parameters.peakPosition,
-      0,
-      0,
+      parameters.strokeWidth,
+      parameters.peakScale,
+      parameters.pullDuration,
+      parameters.frequency,
+      parameters.dampingRatio,
       ...colorComponents(parameters.fill),
       ...colorComponents(parameters.stroke),
     ]);

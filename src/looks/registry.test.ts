@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { balloonStrokeLookDefinition } from './balloonStroke';
 import { collapseLookDefinition } from './collapse';
 import { crumpleLookDefinition } from './crumple';
+import { elasticLookDefinition } from './elastic';
 import {
   createBalloonStrokeLook,
   createCollapseLook,
   createCrumpleLook,
+  createElasticLook,
   effectUniformsForLook,
   lookDefinitions,
   meshParametersForLook,
@@ -40,6 +42,19 @@ describe('typography look registry', () => {
     expect(balloonStrokeLookDefinition.parameters.map(({ key }) => key)).toContain('fontWeight');
     expect(balloonStrokeLookDefinition.parameters.map(({ key }) => key)).not.toContain('showMesh');
     expect(balloonStrokeLookDefinition.defaults.fontWeight).toBeLessThan(400);
+  });
+
+  it('gives Elastic independent spring and outline controls', () => {
+    const look = createElasticLook();
+    const changed = updateLookParameter(look, 'peakScale', 9);
+    const keys = elasticLookDefinition.parameters.map(({ key }) => key);
+
+    expect(changed.parameters.peakScale).toBe(2);
+    expect(keys).toContain('strokeWidth');
+    expect(keys).toContain('frequency');
+    expect(keys).toContain('dampingRatio');
+    expect(keys).toContain('pullDuration');
+    expect(keys).not.toContain('balloonStroke');
   });
 
   it('preserves the old rigid-glyph settings as Collapse', () => {
